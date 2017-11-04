@@ -78,6 +78,19 @@ class VariableLengthUIntAdapter(Adapter):
 variableLengthCodec = VariableLengthUIntAdapter(RepeatUntil(lambda obj, lst, ctx: obj < 0x80, Byte))
 
 
+class OffsetIntAdapter(Adapter):
+    __slots__ = ["offset"]
+    def __init__(self, subcon, offset):
+        super(OffsetIntAdapter, self).__init__(subcon)
+        self.offset = offset
+
+    def _encode(self, obj, context):
+        return obj - self.offset
+
+    def _decode(self, obj, context):
+        return obj + self.offset
+
+
 midiRunningCodec = Struct(
     EmbeddedBitStruct(
         Const(BitsInteger(1), 0x00),
@@ -148,7 +161,8 @@ midiPitchWheelChangeCodec = Struct(
 midiSysexCodec = Struct(
     Const(Byte, 0xf0),
     "command" / Type("sysex"),
-    "data" / PrefixedArray(variableLengthCodec, Byte),
+    "data" / PrefixedArray(OffsetIntAdapter(variableLengthCodec, -1), Byte),
+    Const(Byte, 0xf7)
 )
 
 def buildMetaFixedLenCodec(id, command, length, valueCodec):
@@ -245,6 +259,8 @@ midiEventCodec = Struct(
     ))
 )
 
+midiTrackCodec = FocusedSeq(1, Const(b"MTrk"), Prefixed(Int32ub, GreedyRange(midiEventCodec)))
+
 midiSectionCodec = Struct(
     Const(b"MThd"),
     "section" / Type("midi"),
@@ -252,8 +268,7 @@ midiSectionCodec = Struct(
     Const(Int16ub, 0),
     Const(Int16ub, 1),
     Const(Int16ub, 1920),
-    Const(b"MTrk"),
-    "events" / Prefixed(Int32ub, GreedyRange(midiEventCodec))
+    "track" / midiTrackCodec
 )
 
 
@@ -340,41 +355,41 @@ ctCommonCodec = Struct(
     ),
     "source-chord-key" / keyCodec,
     "source-chord-type" / Enum(Byte, **{
-        "Maj": 1,
-        "Maj6": 2,
-        "Maj7": 3,
-        "Maj7#11": 4,
-        "Maj(9)": 5,
-        "Maj7(9)": 6,
-        "Maj6(9)": 7,
-        "aug": 8,
-        "min": 9,
-        "min6": 10,
-        "min7": 11,
-        "m7b5": 12,
-        "min(9)": 13,
-        "min7(9)": 14,
-        "min7(11)": 15,
-        "minMaj7": 16,
-        "minMaj7(9)": 17,
-        "dim": 18,
-        "dim7": 19,
-        "7th": 20,
-        "7sus4": 21,
-        "7b5": 22,
-        "7(9)": 23,
-        "7#11": 24,
-        "7(13)": 25,
-        "7(b9)": 26,
-        "7(b13)": 27,
-        "7(#9)": 28,
-        "Maj7aug": 29,
-        "7aug": 30,
-        "1+8": 31,
-        "1+5": 32,
-        "sus4": 33,
-        "1+2+5": 34,
-        "cancel": 35
+        "Maj": 0,
+        "Maj6": 1,
+        "Maj7": 2,
+        "Maj7#11": 3,
+        "Maj(9)": 4,
+        "Maj7(9)": 5,
+        "Maj6(9)": 6,
+        "aug": 7,
+        "min": 8,
+        "min6": 9,
+        "min7": 10,
+        "m7b5": 11,
+        "min(9)": 12,
+        "min7(9)": 13,
+        "min7(11)": 14,
+        "minMaj7": 15,
+        "minMaj7(9)": 16,
+        "dim": 17,
+        "dim7": 18,
+        "7th": 19,
+        "7sus4": 20,
+        "7b5": 21,
+        "7(9)": 22,
+        "7#11": 23,
+        "7(13)": 24,
+        "7(b9)": 25,
+        "7(b13)": 26,
+        "7(#9)": 27,
+        "Maj7aug": 28,
+        "7aug": 29,
+        "1+8": 30,
+        "1+5": 31,
+        "sus4": 32,
+        "1+2+5": 33,
+        "cancel": 34
     })
 );
 
@@ -499,7 +514,6 @@ debugCodec = Struct(
 
 csegCodec = Struct(
     Const(b"CSEG"),
-    #"entries" / Prefixed(Int32ub, sdecCodec >> ctb2Codec)
     "entries" / Prefixed(Int32ub, GreedyRange(Select(sdecCodec, ctabCodec, ctb2Codec, cnttCodec)))
 )
 
@@ -510,13 +524,11 @@ casmSectionCodec = Struct(
 )
 
 
-
 otsSectionCodec = Struct(
     Const(b"OTSc"),
     "section" / Type("ots"),
-    "data" / PascalString(Int32ub)
+    "tracks" / Prefixed(Int32ub, GreedyRange(midiTrackCodec))
 )
-
 
 
 mdbSectionCodec = Struct(
@@ -528,8 +540,14 @@ mdbSectionCodec = Struct(
 
 styleCodec = GreedyRange(Select(midiSectionCodec, casmSectionCodec, otsSectionCodec, mdbSectionCodec))
 
-flowStyleCmds = {'on', 'off', 'cc', 'pc', 'press', 'pitch', 'meta-time', 'meta-key', 'meta-tempo', 'meta-eot'}
+
+class HexInt(int): pass
+def hexIntRepresenter(dumper, data):
+    return yaml.ScalarNode('tag:yaml.org,2002:int', hex(data))
+
+flowStyleCmds = {'on', 'off', 'cc', 'pc', 'press', 'pitch', 'meta-time', 'meta-key', 'meta-tempo', 'meta-eot', 'meta-marker', 'meta-track', 'meta-text', 'meta', 'sysex'}
 flowContainerKeys = {'ntt', 'chord-play', 'note-play'}
+hexListKeys = {'data'}
 def containerRepresenter(dumper, data, flow_style = None):
     value = []
     node = yaml.MappingNode(u'tag:yaml.org,2002:map', value, flow_style=None)
@@ -539,6 +557,10 @@ def containerRepresenter(dumper, data, flow_style = None):
 
         if item_key in flowContainerKeys and type(item_value) is Container:
             node_value = containerRepresenter(dumper, item_value, True)
+
+        elif item_key in hexListKeys and type(item_value) is ListContainer:
+            node_value = dumper.represent_data([HexInt(val) for val in item_value])
+
         else:
             node_value = dumper.represent_data(item_value)
 
@@ -554,6 +576,7 @@ def listContainerRepresenter(dumper, data):
 
 yaml.add_representer(Container, containerRepresenter, Dumper=yaml.SafeDumper)
 yaml.add_representer(ListContainer, listContainerRepresenter, Dumper=yaml.SafeDumper)
+yaml.add_representer(HexInt, hexIntRepresenter, Dumper=yaml.SafeDumper)
 
 
 with open('sample/KeherwaTaalT226.sty', 'rb') as f:
