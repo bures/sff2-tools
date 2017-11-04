@@ -95,28 +95,30 @@ class TrackSplitAdapter(Adapter):
         else:
             return 'channel' + str(no)
 
-    def _getChannelNo(id):
-        if id == 'common':
-            return None
-        else:
-            return int(id[7:])
-
     def _encode(self, obj, context):
+        channelNos = [None, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
         events = []
+        sectionStartTime = 0
 
         for section in obj:
-            for channelId, channelEvents in section['channels'].items():
-                channelNo = TrackSplitAdapter._getChannelNo(channelId)
+            for channelNo in channelNos:
+                channelId = TrackSplitAdapter._getChannelId(channelNo)
 
-                for event in channelEvents:
-                    event = dict(event)
+                if channelId in section['channels']:
+                    channelEvents = section['channels'][channelId]
 
-                    if channelNo is not None:
-                        event['channel'] = channelNo
+                    for event in channelEvents:
+                        event = dict(event)
 
-                    event['time'] = event['time'] + section['start']
+                        if channelNo is not None:
+                            event['channel'] = channelNo
 
-                    events.append(event)
+                        event['time'] = event['time'] + sectionStartTime
+
+                        events.append(event)
+
+            sectionStartTime += section['length']
 
         events.sort(key = lambda event: event['time'])
 
@@ -138,13 +140,14 @@ class TrackSplitAdapter(Adapter):
 
 
         section = Container(
-            start=0,
+            length=0,
             channels=channels
         )
 
         sections = [section]
 
         globalTime = 0
+        sectionStartTime = globalTime
         sectionTime = 0
 
         for event in obj:
@@ -154,13 +157,16 @@ class TrackSplitAdapter(Adapter):
             sectionTime += event.time
 
             if ((event.command == 'meta-marker' and event.value in sectionMarkers) or (event.command == 'meta-eot')):
+                section.length = sectionTime
+
                 channels = Container()
                 section = Container(
-                    start=globalTime,
+                    length=0,
                     channels=channels
                 )
 
                 sections.append(section)
+                sectionStartTime = globalTime
                 sectionTime = 0
 
 
