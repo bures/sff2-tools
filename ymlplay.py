@@ -9,6 +9,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='YML MIDI Player')
 parser.add_argument('input', type=str, help='input yaml')
+parser.add_argument('-c', '--channels', type=str, default='8,9,10,11,12,13,14,15', help='channel numbers to play')
 parser.add_argument('-l', '--list-midi-ports', action='store_true', help='lists midi ports and exits')
 parser.add_argument('-p', '--midi-port', type=int, default=0, help='midi port number')
 parser.add_argument('-s', '--section', type=int, default=2, help='index of section to play in a loop')
@@ -32,7 +33,9 @@ if (args.list_midi_ports):
 
 
 
-channelIds = [None, 8, 9]
+channelIds = [int(x) for x in args.channels.split(',')]
+channelIds.insert(0, None)
+
 initSectionIdxs = [0, 1]
 loopSectionIdxs = [args.section]
 
