@@ -318,37 +318,39 @@ midiGenericMetaCodec = Struct(
     "data" / PrefixedArray(variableLengthCodec, Byte),
 )
 
-midiEventCodec = Struct(
-    "time" / variableLengthCodec,
-    "data" / Embedded(Select(
-        midiRunningCodec,
-        midiNoteOnCodec,
-        midiNoteOffCodec,
-        midiKeyPressCodec,
-        midiControlChangeCodec,
-        midiProgramChangeCodec,
-        midiPitchWheelChangeCodec,
-        midiSysexCodec,
-        midiMetaSequenceCodec,
-        midiMetaTextCodec,
-        midiMetaCopyrightCodec,
-        midiMetaTrackNameCodec,
-        midiMetaTrackInstrumentNameCodec,
-        midiMetaLyricCodec,
-        midiMetaMarkerCodec,
-        midiMetaCueCodec,
-        midiMetaChannelPrefixCodec,
-        midiMetaPortCodec,
-        midiMetaEOTCodec,
-        midiMetaTempoCodec,
-        midiMetaSMPTEOffsetCodec,
-        midiMetaTimeSigCodec,
-        midiMetaKeySigCodec,
-        midiGenericMetaCodec
-    ))
+midiEventCodec = Select(
+    midiRunningCodec,
+    midiNoteOnCodec,
+    midiNoteOffCodec,
+    midiKeyPressCodec,
+    midiControlChangeCodec,
+    midiProgramChangeCodec,
+    midiPitchWheelChangeCodec,
+    midiSysexCodec,
+    midiMetaSequenceCodec,
+    midiMetaTextCodec,
+    midiMetaCopyrightCodec,
+    midiMetaTrackNameCodec,
+    midiMetaTrackInstrumentNameCodec,
+    midiMetaLyricCodec,
+    midiMetaMarkerCodec,
+    midiMetaCueCodec,
+    midiMetaChannelPrefixCodec,
+    midiMetaPortCodec,
+    midiMetaEOTCodec,
+    midiMetaTempoCodec,
+    midiMetaSMPTEOffsetCodec,
+    midiMetaTimeSigCodec,
+    midiMetaKeySigCodec,
+    midiGenericMetaCodec
 )
 
-midiTrackCodec = FocusedSeq(1, Const(b"MTrk"), Prefixed(Int32ub, GreedyRange(midiEventCodec)))
+timestampedMidiEventCodec = Struct(
+    "time" / variableLengthCodec,
+    "data" / Embedded(midiEventCodec)
+)
+
+midiTrackCodec = FocusedSeq(1, Const(b"MTrk"), Prefixed(Int32ub, GreedyRange(timestampedMidiEventCodec)))
 
 midiSectionCodec = Struct(
     Const(b"MThd"),
