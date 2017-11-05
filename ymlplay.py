@@ -3,7 +3,7 @@
 import time
 import rtmidi
 from pprint import pprint
-
+import sys
 from style_codec import *
 import argparse
 
@@ -33,8 +33,8 @@ if (args.list_midi_ports):
 
 
 
-channelIds = [int(x) for x in args.channels.split(',')]
-channelIds.insert(0, None)
+channelNos = [int(x) for x in args.channels.split(',')]
+channelNos.insert(0, None)
 
 initSectionIdxs = [0, 1]
 loopSectionIdxs = [args.section]
@@ -59,7 +59,7 @@ def getEvents(sectionIdxs, eot=True):
     for sectionIdx in sectionIdxs:
         section = trackSections[sectionIdx]
 
-        for channelNo in channelIds:
+        for channelNo in channelNos:
 
             channelId = getChannelId(channelNo)
 
@@ -110,7 +110,22 @@ midiout.open_port(args.midi_port)
 
 playEvents(initEvents)
 
-while True:
-    playEvents(loopEvents)
+try:
+    while True:
+        playEvents(loopEvents)
+except KeyboardInterrupt:
+    pass
+
+
+for channelNo in channelNos:
+    if channelNo is not None:
+        event = {
+            'command': 'cc-all-notes-off',
+            'channel': channelNo
+        }
+
+        data = midiEventCodec.build(event)
+        midiout.send_message(data)
+
 
 del midiout

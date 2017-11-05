@@ -108,6 +108,7 @@ class TrackSplitAdapter(Adapter):
 
 
         section = Container(
+            name="Prologue",
             length=0,
             channels=channels
         )
@@ -129,6 +130,7 @@ class TrackSplitAdapter(Adapter):
 
                 channels = Container()
                 section = Container(
+                    name=event.value if event.command == 'meta-marker' else 'Epilogue',
                     length=0,
                     channels=channels
                 )
@@ -188,7 +190,7 @@ midiCCCodec = Struct(
     "value" / Byte
 )
 
-def buildMidiCCCodec(command, controller):
+def buildMidiCCValueCodec(command, controller, valueCodec = Byte):
     return Struct(
         EmbeddedBitStruct(
             Const(BitsInteger(4), 0x0b),
@@ -199,12 +201,25 @@ def buildMidiCCCodec(command, controller):
         "value" / Byte
     )
 
-midiCCVolumeCodec = buildMidiCCCodec("cc-volume", 7)
-midiCCBankSelectMSBCodec = buildMidiCCCodec("cc-bank-select-msb", 0)
-midiCCBankSelectLSBCodec = buildMidiCCCodec("cc-bank-select-lsb", 32)
-midiCCReverbLevelCodec = buildMidiCCCodec("cc-reverb-level", 91)
-midiCCChorusLevelCodec = buildMidiCCCodec("cc-chorus-level", 93)
-midiCCPanCodec = buildMidiCCCodec("cc-pan", 10)
+midiCCVolumeCodec = buildMidiCCValueCodec("cc-volume", 7)
+midiCCBankSelectMSBCodec = buildMidiCCValueCodec("cc-bank-select-msb", 0)
+midiCCBankSelectLSBCodec = buildMidiCCValueCodec("cc-bank-select-lsb", 32)
+midiCCReverbLevelCodec = buildMidiCCValueCodec("cc-reverb-level", 91)
+midiCCChorusLevelCodec = buildMidiCCValueCodec("cc-chorus-level", 93)
+midiCCPanCodec = buildMidiCCValueCodec("cc-pan", 10)
+
+def buildMidiCCCommandCodec(command, controller, value):
+    return Struct(
+        EmbeddedBitStruct(
+            Const(BitsInteger(4), 0x0b),
+            "command" / Type(command),
+            "channel" / BitsInteger(4)
+        ),
+        Const(Byte, controller),
+        Const(Byte, value)
+    )
+
+midiCCAllNotesOffCodec = buildMidiCCCommandCodec("cc-all-notes-off", 123, 0)
 
 midiProgramChangeCodec = Struct(
     EmbeddedBitStruct(
@@ -305,6 +320,7 @@ midiEventCodec = Select(
     midiCCReverbLevelCodec,
     midiCCChorusLevelCodec,
     midiCCPanCodec,
+    midiCCAllNotesOffCodec,
     midiCCCodec,
     midiProgramChangeCodec,
     midiPitchWheelChangeCodec,
