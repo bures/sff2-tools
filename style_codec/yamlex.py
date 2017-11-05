@@ -5,7 +5,7 @@ class HexInt(int): pass
 def hexIntRepresenter(dumper, data):
     return yaml.ScalarNode('tag:yaml.org,2002:int', hex(data))
 
-flowStyleCmds = {'on', 'off', 'cc', 'pc', 'press', 'pitch', 'meta-time', 'meta-key', 'meta-tempo', 'meta-eot', 'meta-marker', 'meta-track', 'meta-text', 'meta', 'sysex'}
+flowStyleCmds = {'on', 'off', 'cc', 'cc-volume', 'cc-bank-select-msb', 'cc-bank-select-lsb', 'cc-reverb-level', 'cc-chorus-level', 'cc-pan', 'pc', 'press', 'pitch', 'meta-time', 'meta-key', 'meta-tempo', 'meta-eot', 'meta-marker', 'meta-track', 'meta-text', 'meta', 'sysex'}
 flowContainerKeys = {'ntt', 'chord-play', 'note-play'}
 hexListKeys = {'data'}
 def containerRepresenter(dumper, data, flow_style = None):

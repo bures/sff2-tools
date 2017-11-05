@@ -2,41 +2,6 @@ from construct import *
 
 beatResolution = 1920
 
-'''
-class GreedyRangeWithLast(Subconstruct):
-    def __init__(self, subcon):
-        super(GreedyRangeWithLast, self).__init__(subcon)
-    def _parse(self, stream, context, path):
-        obj = ListContainer()
-        context = Container(_ = context, last = None)
-        try:
-            while True:
-                fallback = stream.tell()
-                obj.append(self.subcon._parse(stream, context, path))
-                context.last = obj[-1]
-        except StopIteration:
-            pass
-        except ExplicitError:
-            raise
-        except Exception:
-            stream.seek(fallback)
-        return obj
-    def _build(self, obj, stream, context, path):
-        if not isinstance(obj, collections.Sequence):
-            raise RangeError("expected sequence type, found %s" % type(obj))
-        context = Container(_ = context)
-        try:
-            for i,subobj in enumerate(obj):
-                self.subcon._build(subobj, stream, context, path)
-        except StopIteration:
-            pass
-        except ExplicitError:
-            raise
-        except Exception:
-            raise
-    def _sizeof(self, context, path):
-        raise SizeofError("cannot calculate size, unless element count and size is fixed")
-'''
 
 class Type(Construct):
     __slots__ = ["value"]
@@ -73,6 +38,9 @@ class VariableLengthUIntAdapter(Adapter):
 
 variableLengthCodec = VariableLengthUIntAdapter(RepeatUntil(lambda obj, lst, ctx: obj < 0x80, Byte))
 
+
+def FullRange(codec):
+    return FocusedSeq(0, GreedyRange(codec), Terminated)
 
 class OffsetIntAdapter(Adapter):
     __slots__ = ["offset"]
@@ -180,15 +148,6 @@ class TrackSplitAdapter(Adapter):
         return sections
 
 
-midiRunningCodec = Struct(
-    EmbeddedBitStruct(
-        Const(BitsInteger(1), 0x00),
-        "command" / Type("dtto"),
-        "data1" / BitsInteger(7)
-    ),
-    "WARNING" / Computed("Not supported")
-)
-
 midiNoteOffCodec = Struct(
     EmbeddedBitStruct(
         Const(BitsInteger(4), 0x08),
@@ -219,7 +178,7 @@ midiKeyPressCodec = Struct(
     "velocity" / Byte
 )
 
-midiControlChangeCodec = Struct(
+midiCCCodec = Struct(
     EmbeddedBitStruct(
         Const(BitsInteger(4), 0x0b),
         "command" / Type("cc"),
@@ -228,6 +187,24 @@ midiControlChangeCodec = Struct(
     "controller" / Byte,
     "value" / Byte
 )
+
+def buildMidiCCCodec(command, controller):
+    return Struct(
+        EmbeddedBitStruct(
+            Const(BitsInteger(4), 0x0b),
+            "command" / Type(command),
+            "channel" / BitsInteger(4)
+        ),
+        Const(Byte, controller),
+        "value" / Byte
+    )
+
+midiCCVolumeCodec = buildMidiCCCodec("cc-volume", 7)
+midiCCBankSelectMSBCodec = buildMidiCCCodec("cc-bank-select-msb", 0)
+midiCCBankSelectLSBCodec = buildMidiCCCodec("cc-bank-select-lsb", 32)
+midiCCReverbLevelCodec = buildMidiCCCodec("cc-reverb-level", 91)
+midiCCChorusLevelCodec = buildMidiCCCodec("cc-chorus-level", 93)
+midiCCPanCodec = buildMidiCCCodec("cc-pan", 10)
 
 midiProgramChangeCodec = Struct(
     EmbeddedBitStruct(
@@ -319,11 +296,16 @@ midiGenericMetaCodec = Struct(
 )
 
 midiEventCodec = Select(
-    midiRunningCodec,
     midiNoteOnCodec,
     midiNoteOffCodec,
     midiKeyPressCodec,
-    midiControlChangeCodec,
+    midiCCVolumeCodec,
+    midiCCBankSelectMSBCodec,
+    midiCCBankSelectLSBCodec,
+    midiCCReverbLevelCodec,
+    midiCCChorusLevelCodec,
+    midiCCPanCodec,
+    midiCCCodec,
     midiProgramChangeCodec,
     midiPitchWheelChangeCodec,
     midiSysexCodec,
@@ -350,7 +332,7 @@ timestampedMidiEventCodec = Struct(
     "data" / Embedded(midiEventCodec)
 )
 
-midiTrackCodec = FocusedSeq(1, Const(b"MTrk"), Prefixed(Int32ub, GreedyRange(timestampedMidiEventCodec)))
+midiTrackCodec = FocusedSeq(1, Const(b"MTrk"), Prefixed(Int32ub, FullRange(timestampedMidiEventCodec)))
 
 midiSectionCodec = Struct(
     Const(b"MThd"),
@@ -600,20 +582,20 @@ cnttCodec = Struct(
 
 csegCodec = Struct(
     Const(b"CSEG"),
-    "entries" / Prefixed(Int32ub, GreedyRange(Select(sdecCodec, ctabCodec, ctb2Codec, cnttCodec)))
+    "entries" / Prefixed(Int32ub, FullRange(Select(sdecCodec, ctabCodec, ctb2Codec, cnttCodec)))
 )
 
 casmSectionCodec = Struct(
     Const(b"CASM"),
     "section" / Type("casm"),
-    "csegs" / Prefixed(Int32ub, GreedyRange(csegCodec))
+    "csegs" / Prefixed(Int32ub, FullRange(csegCodec))
 )
 
 
 otsSectionCodec = Struct(
     Const(b"OTSc"),
     "section" / Type("ots"),
-    "tracks" / Prefixed(Int32ub, GreedyRange(midiTrackCodec))
+    "tracks" / Prefixed(Int32ub, FullRange(midiTrackCodec))
 )
 
 
@@ -633,8 +615,8 @@ mdbRecord = Struct(
 mdbSectionCodec = Struct(
     Const(b"FNRc"),
     "section" / Type("mdb"),
-    "records" / Prefixed(Int32ub, GreedyRange(mdbRecord))
+    "records" / Prefixed(Int32ub, FullRange(mdbRecord))
 )
 
 
-styleCodec = GreedyRange(Select(midiSectionCodec, casmSectionCodec, otsSectionCodec, mdbSectionCodec))
+styleCodec = FullRange(Select(midiSectionCodec, casmSectionCodec, otsSectionCodec, mdbSectionCodec))
