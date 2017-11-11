@@ -30,8 +30,8 @@ if (args.list_midi_ports):
     exit(0)
 
 
-channelNos = [int(x) for x in args.channels.split(',')]
+channels = [int(x) for x in args.channels.split(',')]
 
 style = Style.fromYml(args.input)
 
-style.play(channelNos=channelNos, trackSections=[args.section], tempo=args.tempo, midiPort=args.midi_port, key=args.key, chord=args.chord)
+style.play(channels=channels, trackSections=[args.section], tempo=args.tempo, midiPort=args.midi_port, key=args.key, chord=args.chord)
