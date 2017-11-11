@@ -1,11 +1,14 @@
 import time
 import rtmidi
 from construct import Container
+import json
 
-from .codecs import styleCodec, midiEventCodec, beatResolution, TrackSplitAdapter, sectionMarkers, csegEntriesCodec
+from .codecs import styleCodec, midiEventCodec, beatResolution as beats, TrackSplitAdapter, sectionMarkers, csegEntriesCodec
 from .yamlex import yaml
 
 from pprint import pprint
+
+getChannelId = TrackSplitAdapter.getChannelId
 
 allTrackSections = ['Prologue', 'SInt', 'Main A', 'Main B', 'Main C', 'Main D', 'Fill In AA', 'Fill In BB',
                  'Fill In CC', 'Fill In DD', 'Intro A', 'Intro B', 'Intro C', 'Ending A', 'Ending B',
@@ -16,7 +19,7 @@ allTrackSectionsWithNotes = ['Main A', 'Main B', 'Main C', 'Main D', 'Fill In AA
                  'Ending C', 'Fill In BA']
 
 
-allChannelNos = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+allChannels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 
 transpositions = {
@@ -50,52 +53,119 @@ transpositionNotes = {
 }
 
 
-def deepcopy(obj):
+def clone(obj):
     if isinstance(obj, dict):
         newDict = Container()
         for key, val in obj.items():
-            newDict[key] = deepcopy(val)
+            newDict[key] = clone(val)
         return newDict
 
     elif isinstance(obj, list):
-        return [deepcopy(x) for x in obj]
+        return [clone(x) for x in obj]
     else:
         return obj
 
 
-def getEmptyStyle(name):
-    data = '''- section: midi
-  track-sections:
-  - name: Prologue
-    length: 0
-    channels:
-      common:
-      - {time: 0, command: meta-time, num: 4, denom: 2}
-      - {time: 0, command: meta-tempo, value: 428571}
-      - {time: 0, command: meta-marker, value: SFF2}
-      - {time: 0, command: meta-track, value: "''' + name + '''"}
-      - {time: 0, command: sysex, data: [0x43, 0x76, 0x1a, 0x10, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1]}
-      - {time: 0, command: sysex, data: [0x43, 0x73, 0x39, 0x11, 0x0, 0x46, 0x0]}
-      - {time: 0, command: sysex, data: [0x43, 0x73, 0x1, 0x51, 0x5, 0x0, 0x1, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0]}
-      - {time: 0, command: sysex, data: [0x43, 0x73, 0x1, 0x51, 0x5, 0x0, 0x2, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0]}
-  - name: SInt
-    length: 7680
-    channels:
-      common:
-      - {time: 0, command: meta-marker, value: SInt}
-      - {time: 0, command: sysex, data: [0x7e, 0x7f, 0x9, 0x1]}
-      - {time: 225, command: sysex, data: [0x43, 0x10, 0x4c, 0x0, 0x0, 0x7e, 0x0]}
-      - {time: 480, command: sysex, data: [0x43, 0x10, 0x4c, 0x2, 0x1, 0x5a, 0x1]}
-      - {time: 485, command: sysex, data: [0x43, 0x10, 0x4c, 0x8, 0x8, 0x7, 0x3]}
-      - {time: 490, command: sysex, data: [0x43, 0x10, 0x4c, 0x8, 0x9, 0x7, 0x2]}
-  - name: Epilogue
-    length: 0
-    channels:
-      common:
-      - {time: 0, command: meta-eot}
-'''
+def getEmptyStyle(name, tempo=100):
+    return [
+        {
+            'section': 'midi',
+            'track-sections': [
+                {
+                    'name': 'Prologue',
+                    'length': 0,
+                    'channels': {
+                        'common': [
+                            {'time': 0, 'command': 'meta-time', 'num': 4, 'denom': 2},
+                            {'time': 0, 'command': 'meta-tempo', 'value': 60000000 / tempo},
+                            {'time': 0, 'command': 'meta-marker', 'value': 'SFF2'},
+                            {'time': 0, 'command': 'meta-track', 'value': name},
+                            {'time': 0, 'command': 'sysex', 'data': [0x43, 0x76, 0x1a, 0x10, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1]},
+                            {'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x39, 0x11, 0x0, 0x46, 0x0]},
+                            {'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x51, 0x5, 0x0, 0x1, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0]},
+                            {'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x51, 0x5, 0x0, 0x2, 0x8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0]}
+                        ]
+                    }
+                },
+                {
+                    'name': 'SInt',
+                    'length': 7680,
+                    'channels': {
+                        'common': [
+                            {'time': 0, 'command': 'meta-marker', 'value': 'SInt'},
+                            {'time': 0, 'command': 'sysex', 'data': [0x7e, 0x7f, 0x9, 0x1]},
+                            {'time': 225, 'command': 'sysex', 'data': [0x43, 0x10, 0x4c, 0x0, 0x0, 0x7e, 0x0]},
+                            {'time': 480, 'command': 'sysex', 'data': [0x43, 0x10, 0x4c, 0x2, 0x1, 0x5a, 0x1]},
+                            {'time': 485, 'command': 'sysex', 'data': [0x43, 0x10, 0x4c, 0x8, 0x8, 0x7, 0x3]},
+                            {'time': 490, 'command': 'sysex', 'data': [0x43, 0x10, 0x4c, 0x8, 0x9, 0x7, 0x2]}
+                        ]
+                    }
+                },
+                {
+                    'name': 'Epilogue',
+                    'length': 0,
+                    'channels': {
+                        'common': [
+                            {'time': 0, 'command': 'meta-eot'}
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
 
-    return yaml.safe_load(data)
+
+def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', chordKey='c', chordType='Maj7'):
+    return {
+        "type": "ctb2",
+        "source-channel": sourceChannel,
+        "name": name,
+        "destination-channel": destChannel,
+        "editable": True,
+        "note-play": { "b": 1, "a#": 1, "a": 1, "g#": 1, "g": 1, "f#": 1, "f": 1, "e": 1, "d#": 1, "d": 1, "c#": 1, "c": 1 },
+        "chord-play": { "bit35": 0, "autostart": 1, "1+2+5": 1, "sus4": 1, "1+5": 1, "1+8": 1, "7aug": 1, "Maj7aug": 1, "7(#9)": 1,
+            "7(b13)": 1, "7(b9)": 1, "7(13)": 1, "7#11": 1, "7(9)": 1, "7b5": 1, "7sus4": 1, "7th": 1, "dim7": 1, "dim": 1, "minMaj7(9)": 1,
+            "minMaj7": 1, "min7(11)": 1, "min7(9)": 1, "min(9)": 1, "m7b5": 1, "min7": 1, "min6": 1, "min": 1, "aug": 1, "Maj6(9)": 1,
+            "Maj7(9)": 1, "Maj(9)": 1, "Maj7#11": 1, "Maj7": 1, "Maj6": 1, "Maj": 1 },
+        "source-chord-key": chordKey,
+        "source-chord-type": chordType,
+        "lowest-note-of-middle-notes": 0,
+        "highest-note-of-middle-notes": 127,
+        "low": {
+            "ntr": ntr,
+            "ntt": {
+                "bass": False,
+                "rule": ntt
+            },
+            "high-key": "f#",
+            "note-low-limit": 0,
+            "note-high-limit": 127,
+            "retrigger-rule": "pitch-shift"
+        },
+        "middle": {
+            "ntr": ntr,
+            "ntt": {
+                "bass": False,
+                "rule": ntt
+            },
+            "high-key": "f#",
+            "note-low-limit": 0,
+            "note-high-limit": 127,
+            "retrigger-rule": "pitch-shift"
+        },
+        "high": {
+            "ntr": ntr,
+            "ntt": {
+                "bass": False,
+                "rule": ntt
+            },
+            "high-key": "f#",
+            "note-low-limit": 0,
+            "note-high-limit": 127,
+            "retrigger-rule": "pitch-shift"
+        },
+        "unknown": [ 0, 0, 0, 0, 0, 0, 0 ]
+    }
 
 
 def getTrackSectionCommon(name):
@@ -105,10 +175,72 @@ def getTrackSectionCommon(name):
     ]
 
 
+def getChannelSetupEvents(bankMsb, bankLsb, program, volume=100, pan=64, reverb=20, chorus=10, channel=None):
+    def withChannel(event):
+        if channel is not None:
+            event['channel'] = channel
+        return event
+
+    return [
+        withChannel({ "time": 0, "command": "cc-volume", "value": volume }),
+        withChannel({ "time": 0, "command": "cc-pan", "value": pan }),
+        withChannel({ "time": 0, "command": "cc-reverb-level", "value": reverb }),
+        withChannel({ "time": 0, "command": "cc-chorus-level", "value": chorus }),
+        withChannel({ "time": 0, "command": "cc-bank-select-msb", "value": bankMsb }),
+        withChannel({ "time": 0, "command": "cc-bank-select-lsb", "value": bankLsb }),
+        withChannel({ "time": 0, "command": "pc", "program": program }),
+    ]
+
+
+def getOTSEvents(right1=None, right2=None, right3=None, left=None):
+    # http://www.jososoft.dk/yamaha/articles/ots.htm
+
+    def addVoice(part, voice):
+        def getOpt(key, defaultVal):
+            if key in voice:
+                return voice[key]
+            else:
+                return defaultVal
+
+        nonlocal events
+
+        if voice is not None:
+            events.append({'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x50, 0x8, part, 0x0, 0xf7 if getOpt('enabled', False) else 0x00]})
+            events.append({'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x50, 0x8, part, 0x4, getOpt('volume', 100)]})
+            events.append({'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x50, 0x8, part, 0x3, 0x40 + getOpt('octave', -1)]})
+
+            events.extend(
+                getChannelSetupEvents(
+                    bankMsb=getOpt('bankMsb', 0),
+                    bankLsb=getOpt('bankLsb', 115),
+                    program=getOpt('program', 0),
+                    volume=getOpt('mixer', 100),
+                    pan=getOpt('pan', 64),
+                    reverb=getOpt('reverb', 20),
+                    chorus=getOpt('chorus', 10),
+                    channel=part
+                )
+            )
+
+    events = [
+        {'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x50, 0x5, 0x1, 0x1, 0x2a]}, # Header 1
+        {'time': 0, 'command': 'sysex', 'data': [0x43, 0x73, 0x1, 0x50, 0x5, 0x1, 0x2, 0x32]}, # Header 2
+    ]
+
+    addVoice(0, right1)
+    addVoice(1, right2)
+    addVoice(2, right3)
+    addVoice(3, left)
+
+    events.append({'time': 0, 'command': 'meta-eot'})
+
+    return events
+
+
 class RawStyle(object):
-    def __init__(self, name = '', style = None):
+    def __init__(self, name = '', tempo=100, style = None):
         if style is None:
-            self._style = getEmptyStyle(name)
+            self._style = getEmptyStyle(name, tempo)
         else:
             self._style = style
 
@@ -130,17 +262,20 @@ class RawStyle(object):
         with open(fn, 'wb') as f:
             f.write(styleCodec.build(self._style))
 
-
     def saveAsYml(self, fn):
-        with open(fn, 'wb') as f:
+        with open(fn, 'w') as f:
             f.write(yaml.safe_dump(self._style, width=65536))
+
+    def saveAsJson(self, fn):
+        with open(fn, 'w') as f:
+            f.write(json.dumps(self._style, indent=2))
 
 
 
 class Style(object):
-    def __init__(self, name = '', style = None):
+    def __init__(self, name = '', tempo=100, style = None):
         if style is None:
-            self._style = getEmptyStyle(name)
+            self._style = getEmptyStyle(name, tempo)
         else:
             self._style = style
 
@@ -177,7 +312,7 @@ class Style(object):
 
                         for entry in cseg['entries']:
                             if entry['type'] in ['ctb2', 'ctab', 'cntt']:
-                                partChannels[entry['source-channel']] = deepcopy(entry)
+                                partChannels[entry['source-channel']] = clone(entry)
 
         return channelsPerPart
 
@@ -263,12 +398,12 @@ class Style(object):
         return sect
 
 
-    def _upgradeCASM(self, channelNos=allChannelNos, trackSections=allTrackSections):
+    def _upgradeCASM(self, channels=allChannels, trackSections=allTrackSections):
         for name in trackSections:
             if name in self.casm:
-                for channelNo in channelNos:
-                    if channelNo in self.casm[name]:
-                        entry = self.casm[name][channelNo]
+                for channel in channels:
+                    if channel in self.casm[name]:
+                        entry = self.casm[name][channel]
 
                         if entry['type'] == 'ctab':
                             entry['type'] = 'ctb2'
@@ -330,6 +465,73 @@ class Style(object):
             return events
 
 
+    def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos, replace=False):
+        ts = self.trackSections[trackSection]
+
+        for channel in channels:
+            channelId = getChannelId(channel)
+
+            if channelId in ts['channels']:
+                events = ts['channels'][channelId]
+
+                ending = []
+                for event in events:
+                    if event['command'] == 'on' and event['time'] >= fromTime and event['time'] < toTime:
+                        ending.append({
+                            "time": event['time'] + offset,
+                            "command": "on",
+                            "note": event['note'],
+                            "velocity": event['velocity']
+                        })
+
+                        ending.append({
+                            "time": mutePos,
+                            "command": "off",
+                            "note": event['note'],
+                            "velocity": 0
+                        })
+
+                if replace:
+                    ts['channels'][channelId] = events = ending
+                else:
+                    events.extend(ending)
+
+                events.sort(key=lambda event: event['time'])
+
+
+    def _createTrackSection(self, trackSection, length):
+        self.trackSections[trackSection] = {
+            'name': trackSection,
+            'length': length,
+            'channels': {
+                'common': getTrackSectionCommon(trackSection)
+            }
+        }
+
+        self.casm[trackSection] = {}
+
+
+    def _loopEvents(self, events, loopLength, targetLength):
+        outEvents = []
+        timeOffset = 0
+        while True:
+            for event in events:
+                event = clone(event)
+                event['time'] += timeOffset
+
+                if event['time'] < targetLength:
+                    outEvents.append(event)
+                else:
+                    break
+            else:
+                timeOffset += loopLength
+                continue
+
+            break
+
+        return outEvents
+
+
     @classmethod
     def fromSty(cls, fn):
         with open(fn, 'rb') as f:
@@ -356,6 +558,10 @@ class Style(object):
             f.write(yaml.safe_dump(self._style, width=65536))
 
 
+    def saveAsJson(self, fn):
+        with open(fn, 'w') as f:
+            f.write(json.dumps(self._style, indent=2))
+
 
     def deleteTrackSections(self, trackSections):
         for name in trackSections:
@@ -363,22 +569,22 @@ class Style(object):
             del self.casm[name]
 
 
-    def deleteChannels(self, channelNos, trackSections=allTrackSections):
-        for channelNo in channelNos:
-            channelName = TrackSplitAdapter.getChannelId(channelNo)
+    def deleteChannels(self, channels, trackSections=allTrackSections):
+        for channel in channels:
+            channelId = getChannelId(channel)
 
             for name in trackSections:
-                if name in self.trackSections and channelName in self.trackSections[name]['channels']:
-                    del self.trackSections[name]['channels'][channelName]
+                if name in self.trackSections and channelId in self.trackSections[name]['channels']:
+                    del self.trackSections[name]['channels'][channelId]
 
-                if name in self.casm and channelNo in self.casm[name]:
-                    del self.casm[name][channelNo]
+                if name in self.casm and channel in self.casm[name]:
+                    del self.casm[name][channel]
 
 
 
-    def renumberChannel(self, oldChannelNo, newChannelNo, trackSections=allTrackSections):
-        oldChannelName = TrackSplitAdapter.getChannelId(oldChannelNo)
-        newChannelName = TrackSplitAdapter.getChannelId(newChannelNo)
+    def renumberChannel(self, oldChannel, newChannel, trackSections=allTrackSections):
+        oldChannelName = getChannelId(oldChannel)
+        newChannelName = getChannelId(newChannel)
 
         for name in trackSections:
             if name in self.trackSections:
@@ -386,65 +592,139 @@ class Style(object):
                 del self.trackSections[name]['channels'][oldChannelName]
 
             if name in self.casm:
-                self.casm[name][newChannelNo] = self.casm[name][oldChannelNo]
-                self.casm[name][newChannelNo]['source-channel'] = newChannelNo
-                del self.casm[name][oldChannelNo]
+                self.casm[name][newChannel] = self.casm[name][oldChannel]
+                self.casm[name][newChannel]['source-channel'] = newChannel
+                del self.casm[name][oldChannel]
 
 
-    def adoptChannel(self, other, fromChannelNo, toChannelNo, trackSections=allTrackSections):
-        fromChannelName = TrackSplitAdapter.getChannelId(fromChannelNo)
-        toChannelName = TrackSplitAdapter.getChannelId(toChannelNo)
+    def importChannels(self, other, channels, trackSections=allTrackSections):
+        for channel in channels:
+            if isinstance(channel, tuple):
+                fromChannel, toChannel = channel
+            else:
+                fromChannel = channel
+                toChannel = channel
 
-        for name in trackSections:
-            if name in other.trackSections and fromChannelName in other.trackSections[name]['channels']:
-                if name not in self.trackSections:
-                    self.trackSections[name] = {
-                        'name': name,
-                        'length': other.trackSections[name]['length'],
-                        'channels': {
-                            'common': getTrackSectionCommon(name)
-                        }
-                    }
+            fromChannelName = getChannelId(fromChannel)
+            toChannelName = getChannelId(toChannel)
+
+            for name in trackSections:
+                if isinstance(name, tuple):
+                    if len(name) == 2:
+                        fromTrackSection, toTrackSection = name
+                        targetLength = None
+                    else:
+                        fromTrackSection, toTrackSection, noOfBeats = name
+                        targetLength = beats * noOfBeats
+
                 else:
-                    if self.trackSections[name]['length'] != other.trackSections[name]['length']:
-                        print(f'Warning: Lengths of source and target track section "{name}" differ')
+                    fromTrackSection = name
+                    toTrackSection = name
+                    targetLength = None
+
+                if fromTrackSection in other.trackSections and fromChannelName in other.trackSections[fromTrackSection]['channels']:
+                    if targetLength is None:
+                        targetLength = other.trackSections[fromTrackSection]['length']
+
+                    if toTrackSection not in self.trackSections:
+                        self._createTrackSection(toTrackSection, targetLength)
+                    else:
+                        if self.trackSections[toTrackSection]['length'] != targetLength:
+                            print(f'Warning: The length of target track section "{toTrackSection}" is different. You have to check the resulting style and manually correct the respective midi channel.')
+
+                    self.trackSections[toTrackSection]['channels'][toChannelName] = \
+                        self._loopEvents(other.trackSections[fromTrackSection]['channels'][fromChannelName], other.trackSections[fromTrackSection]['length'], targetLength)
+
+                if fromTrackSection in other.casm and fromChannel in other.casm[fromTrackSection]:
+                    if toTrackSection not in self.casm:
+                        self.casm[toTrackSection] = {}
+
+                    self.casm[toTrackSection][toChannel] = clone(other.casm[fromTrackSection][fromChannel])
+                    self.casm[toTrackSection][toChannel]['source-channel'] = toChannel
 
 
-                self.trackSections[name]['channels'][toChannelName] = deepcopy(other.trackSections[name]['channels'][fromChannelName])
-
-            if name in other.casm and fromChannelNo in other.casm[name]:
-                if name not in self.casm:
-                    self.casm[name] = {}
-
-                self.casm[name][toChannelNo] = deepcopy(other.casm[name][fromChannelNo])
-                self.casm[name][toChannelNo]['source-channel'] = toChannelNo
-
-
-    def transposeChannel(self, channelNo, toKey, toChord, part='middle', trackSections=allTrackSectionsWithNotes):
-        channelName = TrackSplitAdapter.getChannelId(channelNo)
+    def transposeChannel(self, channel, toKey, toChord, part='middle', trackSections=allTrackSectionsWithNotes):
+        channelId = getChannelId(channel)
 
         for name in trackSections:
             if name in self.trackSections:
-                if name not in self.casm or channelNo not in self.casm[name] or self.casm[name][channelNo]['type'] != 'ctb2':
-                    print(f'Warning: Skipping channel {channelNo} in track section "{name}" because ctb2 entry was not found in CASM')
+                if name not in self.casm or channel not in self.casm[name] or self.casm[name][channel]['type'] != 'ctb2':
+                    print(f'Warning: Skipping channel {channel} in track section "{name}" because ctb2 entry was not found in CASM')
                     continue
 
-                fromChord = self.casm[name][channelNo]['source-chord-type']
-                fromKey = self.casm[name][channelNo]['source-chord-key']
+                fromChord = self.casm[name][channel]['source-chord-type']
+                fromKey = self.casm[name][channel]['source-chord-key']
 
-                ctb2 = self.casm[name][channelNo]
+                ctb2 = self.casm[name][channel]
                 ctb2Part = ctb2[part]
 
                 nttRule = ctb2Part['ntt']['rule']
 
-                self.trackSections[name]['channels'][channelName] = self._transposeEvents(self.trackSections[name]['channels'][channelName], nttRule, fromKey, fromChord, toKey, toChord)
+                self.trackSections[name]['channels'][channelId] = self._transposeEvents(self.trackSections[name]['channels'][channelId], nttRule, fromKey, fromChord, toKey, toChord)
 
-                self.casm[name][channelNo]['source-chord-type'] = toChord
-                self.casm[name][channelNo]['source-chord-key'] = toKey
+                self.casm[name][channel]['source-chord-type'] = toChord
+                self.casm[name][channel]['source-chord-key'] = toKey
 
 
-    def play(self, channelNos=allChannelNos, trackSections=['Main A'], tempo=120, midiPort=0, key='c', chord='Maj7'):
-        channelNos.insert(0, None)
+    def wrapUpChannels(self, trackSection, toTime, channels=allChannels, fromTime=0, noOfBeats=4, mutePos=-20):
+        ts = self.trackSections[trackSection]
+                
+        origLength = ts['length']
+        ts['length'] += noOfBeats * beats
+
+        self._addEnding(trackSection, channels, fromTime, toTime, origLength, ts['length'] + mutePos)
+
+
+    def createEnding(self, fromTrackSection, toTrackSection, toTime, channels=allChannels, fromTime=0, noOfBeats=4, mutePos=-20):
+        if toTrackSection in self.trackSections:
+            length = self.trackSections[toTrackSection]['length']
+        else:
+            length = noOfBeats * beats
+
+        self.importChannels(self, channels=channels, trackSections=[(fromTrackSection, toTrackSection, length / beats)])
+
+        self._addEnding(toTrackSection, channels, fromTime, toTime, 0, length + mutePos, replace=True)
+
+
+    def createTrackSection(self, trackSection, noOfBeats):
+        if trackSection not in self.trackSections:
+            self._createTrackSection(trackSection, noOfBeats * beats)
+
+
+    def setupChannel(self, channel, name, bankMsb, bankLsb, program, volume=100, pan=64, reverb=20, chorus=10, ntr='root-fixed', ntt='chord', chordKey='c', chordType='Maj7'):
+        channelId = getChannelId(channel)
+
+        for tsName in allTrackSectionsWithNotes:
+            if tsName in self.trackSections:
+                self.casm[tsName][channel] = getCtb2(name, channel, channel, ntr=ntr, ntt=ntt, chordKey=chordKey, chordType=chordType)
+
+        self.trackSections['SInt']['channels'][channelId] = getChannelSetupEvents(bankLsb=bankLsb, bankMsb=bankMsb, program=program, pan=pan, reverb=reverb, chorus=chorus)
+
+
+    def setEvents(self, channel, noOfBeats, events, trackSections=allTrackSectionsWithNotes, loop=True):
+        channelId = getChannelId(channel)
+        length = noOfBeats * beats
+        for trackSection in trackSections:
+            ts = self.trackSections[trackSection]
+
+            if loop:
+                if loop and ts['length'] % length != 0:
+                    print(f'Warning: The length of track section "{trackSection}" is not a multiply of channel length. You have to check the resulting style and manually correct the respective midi channel.')
+
+                ts['channels'][channelId] = self._loopEvents(events, length, ts['length'])
+
+            else:
+                if ts['length'] != length:
+                    print(f'Warning: The length of track section "{trackSection}" is different. You have to check the resulting style and manually correct the respective midi channel.')
+                ts['channels'][channelId] = events
+
+
+    def addOTS(self, right1=None, right2=None, right3=None, left=None):
+        self.ots.append(getOTSEvents(right1=right1, right2=right2, right3=right3, left=left))
+
+
+    def play(self, channels=allChannels, trackSections=['Main A'], tempo=120, midiPort=0, key='c', chord='Maj7'):
+        channels.insert(0, None)
 
         def getEvents(trackSections, eot=True, transpose=True):
             sectionTime = 0
@@ -453,22 +733,22 @@ class Style(object):
             for name in trackSections:
                 section = self.trackSections[name]
 
-                for channelNo in channelNos:
-                    channelId = TrackSplitAdapter.getChannelId(channelNo)
+                for channel in channels:
+                    channelId = getChannelId(channel)
 
                     if channelId in section['channels']:
-                        inEvents = deepcopy(section['channels'][channelId])
+                        inEvents = clone(section['channels'][channelId])
 
-                        if channelNo is None or not transpose:
+                        if channel is None or not transpose:
                             pass
-                        elif name not in self.casm or channelNo not in self.casm[name] or self.casm[name][channelNo]['type'] != 'ctb2':
+                        elif name not in self.casm or channel not in self.casm[name] or self.casm[name][channel]['type'] != 'ctb2':
                             print(
-                                f'Warning: Skipping transposition of channel {channelNo} in track section "{name}" because ctb2 entry was not found in CASM')
+                                f'Warning: Skipping transposition of channel {channel} in track section "{name}" because ctb2 entry was not found in CASM')
                         else:
-                            fromChord = self.casm[name][channelNo]['source-chord-type']
-                            fromKey = self.casm[name][channelNo]['source-chord-key']
+                            fromChord = self.casm[name][channel]['source-chord-type']
+                            fromKey = self.casm[name][channel]['source-chord-key']
 
-                            ctb2 = self.casm[name][channelNo]
+                            ctb2 = self.casm[name][channel]
                             ctb2Part = ctb2['middle']
 
                             nttRule = ctb2Part['ntt']['rule']
@@ -476,8 +756,8 @@ class Style(object):
                             inEvents = self._transposeEvents(inEvents, nttRule, fromKey, fromChord, key, chord)
 
                         for event in inEvents:
-                            if channelNo != None:
-                                event['channel'] = channelNo
+                            if channel != None:
+                                event['channel'] = channel
 
                             event['time'] += sectionTime
                             events.append(event)
@@ -503,7 +783,7 @@ class Style(object):
             for event in events:
                 tm = event['time']
                 if tm > 0:
-                    time.sleep(tm * (60 / tempo / beatResolution))
+                    time.sleep(tm * (60 / tempo / beats))
 
                 if event['command'][0:4] != 'meta':
                     data = midiEventCodec.build(event)
@@ -523,11 +803,11 @@ class Style(object):
         except KeyboardInterrupt:
             pass
 
-        for channelNo in channelNos:
-            if channelNo is not None:
+        for channel in channels:
+            if channel is not None:
                 event = {
                     'command': 'cc-all-notes-off',
-                    'channel': channelNo
+                    'channel': channel
                 }
 
                 data = midiEventCodec.build(event)
