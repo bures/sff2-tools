@@ -49,8 +49,8 @@ python ymlplay.py XXXXX.sty -c 15 -p 1 -s 2 -t 100
 
 ## Limitations
 
-- MH section of the style file is preserved as a binary chunk, but not interpreted. I'm not aware of any style
-  files that would use this section. 
+- MH section of the style file is not supported. If needed the tools can be easily updated such that the section
+  is at least preserved in a binary format. However, I'm don't have any styles that contain this section to test it. 
 
 - CASM section is ignored by `ymlplay`. This in particular concerns the channel mapping and
   note/chord transpositions. Here the problem is a lack of information how exactly the transposition
