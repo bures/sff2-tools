@@ -57,7 +57,7 @@ class OffsetIntAdapter(Adapter):
 
 sectionMarkers = {'SInt', 'Main A', 'Main B', 'Main C', 'Main D', 'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD', 'Intro A', 'Intro B', 'Intro C', 'Ending A', 'Ending B', 'Ending C', 'Fill In BA'}
 class TrackSplitAdapter(Adapter):
-    def _getChannelId(no = None):
+    def getChannelId(no = None):
         if no == None:
             return 'common'
         else:
@@ -71,7 +71,7 @@ class TrackSplitAdapter(Adapter):
 
         for section in obj:
             for channelNo in channelNos:
-                channelId = TrackSplitAdapter._getChannelId(channelNo)
+                channelId = TrackSplitAdapter.getChannelId(channelNo)
 
                 if channelId in section['channels']:
                     channelEvents = section['channels'][channelId]
@@ -142,10 +142,10 @@ class TrackSplitAdapter(Adapter):
 
             event.time = sectionTime
             if 'channel' in event:
-                addToChannel(TrackSplitAdapter._getChannelId(event.channel), event)
+                addToChannel(TrackSplitAdapter.getChannelId(event.channel), event)
                 del event.channel
             else:
-                addToChannel(TrackSplitAdapter._getChannelId(), event)
+                addToChannel(TrackSplitAdapter.getChannelId(), event)
 
         return sections
 
@@ -596,9 +596,11 @@ cnttCodec = Struct(
     )))
 )
 
+csegEntriesCodec = Prefixed(Int32ub, FullRange(Select(sdecCodec, ctabCodec, ctb2Codec, cnttCodec)))
+
 csegCodec = Struct(
     Const(b"CSEG"),
-    "entries" / Prefixed(Int32ub, FullRange(Select(sdecCodec, ctabCodec, ctb2Codec, cnttCodec)))
+    "entries" / csegEntriesCodec
 )
 
 casmSectionCodec = Struct(

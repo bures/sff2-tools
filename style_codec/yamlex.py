@@ -15,10 +15,10 @@ def containerRepresenter(dumper, data, flow_style = None):
     for item_key, item_value in data.items():
         node_key = dumper.represent_data(item_key)
 
-        if item_key in flowContainerKeys and type(item_value) is Container:
+        if item_key in flowContainerKeys and isinstance(item_value, dict):
             node_value = containerRepresenter(dumper, item_value, True)
 
-        elif item_key in hexListKeys and type(item_value) is ListContainer:
+        elif item_key in hexListKeys and isinstance(item_value, list):
             node_value = dumper.represent_data([HexInt(val) for val in item_value])
 
         else:
@@ -34,6 +34,8 @@ def containerRepresenter(dumper, data, flow_style = None):
 def listContainerRepresenter(dumper, data):
     return dumper.represent_sequence(u'tag:yaml.org,2002:seq', list(data))
 
+yaml.add_representer(dict, containerRepresenter, Dumper=yaml.SafeDumper)
+yaml.add_representer(list, listContainerRepresenter, Dumper=yaml.SafeDumper)
 yaml.add_representer(Container, containerRepresenter, Dumper=yaml.SafeDumper)
 yaml.add_representer(ListContainer, listContainerRepresenter, Dumper=yaml.SafeDumper)
 yaml.add_representer(HexInt, hexIntRepresenter, Dumper=yaml.SafeDumper)

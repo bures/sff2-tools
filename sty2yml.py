@@ -9,5 +9,5 @@ parser.add_argument('output', type=str, help='output yaml')
 
 args = parser.parse_args()
 
-style = loadSty(args.input)
-saveYaml(args.output, style)
+style = RawStyle.fromSty(args.input)
+style.saveAsYml(args.output)
