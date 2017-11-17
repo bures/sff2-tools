@@ -1,6 +1,42 @@
 from construct import *
+import io
+
+from pprint import pprint
 
 beatResolution = 1920
+
+class LastOrStreamByte(Subconstruct):
+    # This class attribute holds the last command. Note that this is wrong because if there was some more complex
+    # backtracking in the rules, this would not obey the rollback. Instead, the last should be remembered
+    # in the context of the encapsulating FullRange. However, for our simple case here it is sufficient.
+    lastByte = None
+
+    def __init__(self, subcon):
+        super(LastOrStreamByte, self).__init__(subcon)
+
+    def _parse(self, stream, context, path):
+        fallback = stream.tell()
+        value = stream.read(1)[0]
+
+        if value & 0x80 == 0x00:
+            value = LastOrStreamByte.lastByte
+            stream.seek(fallback)
+        else:
+            LastOrStreamByte.lastByte = value
+
+        with io.BytesIO(bytes([value])) as valStream:
+            result = self.subcon._parse(valStream, context, path)
+
+        return result
+
+    def _build(self, obj, stream, context, path):
+        self.subcon._build(obj, stream, context, path)
+
+    def _sizeof(self, context, path):
+        return 1
+
+def StreamCommand(*subcons):
+    return LastOrStreamByte(EmbeddedBitStruct(*subcons))
 
 
 class Type(Construct):
@@ -40,7 +76,8 @@ variableLengthCodec = VariableLengthUIntAdapter(RepeatUntil(lambda obj, lst, ctx
 
 
 def FullRange(codec):
-    return FocusedSeq(0, GreedyRange(codec), Terminated)
+    # return FocusedSeq(0, GreedyRange(codec), Terminated)
+    return FocusedSeq(0, GreedyRange(codec))
 
 class OffsetIntAdapter(Adapter):
     __slots__ = ["offset"]
@@ -116,7 +153,6 @@ class TrackSplitAdapter(Adapter):
         sections = [section]
 
         globalTime = 0
-        sectionStartTime = globalTime
         sectionTime = 0
 
         for event in obj:
@@ -136,7 +172,6 @@ class TrackSplitAdapter(Adapter):
                 )
 
                 sections.append(section)
-                sectionStartTime = globalTime
                 sectionTime = 0
 
 
@@ -151,7 +186,7 @@ class TrackSplitAdapter(Adapter):
 
 
 midiNoteOffCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x08),
         "command" / Type("off"),
         "channel" / BitsInteger(4)
@@ -161,7 +196,7 @@ midiNoteOffCodec = Struct(
 )
 
 midiNoteOnCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x09),
         "command" / Type("on"),
         "channel" / BitsInteger(4)
@@ -171,7 +206,7 @@ midiNoteOnCodec = Struct(
 )
 
 midiKeyPressCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x0a),
         "command" / Type("press"),
         "channel" / BitsInteger(4)
@@ -181,7 +216,7 @@ midiKeyPressCodec = Struct(
 )
 
 midiCCCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x0b),
         "command" / Type("cc"),
         "channel" / BitsInteger(4)
@@ -192,7 +227,7 @@ midiCCCodec = Struct(
 
 def buildMidiCCValueCodec(command, controller, valueCodec = Byte):
     return Struct(
-        EmbeddedBitStruct(
+        StreamCommand(
             Const(BitsInteger(4), 0x0b),
             "command" / Type(command),
             "channel" / BitsInteger(4)
@@ -210,7 +245,7 @@ midiCCPanCodec = buildMidiCCValueCodec("cc-pan", 10)
 
 def buildMidiCCCommandCodec(command, controller, value):
     return Struct(
-        EmbeddedBitStruct(
+        StreamCommand(
             Const(BitsInteger(4), 0x0b),
             "command" / Type(command),
             "channel" / BitsInteger(4)
@@ -222,7 +257,7 @@ def buildMidiCCCommandCodec(command, controller, value):
 midiCCAllNotesOffCodec = buildMidiCCCommandCodec("cc-all-notes-off", 123, 0)
 
 midiProgramChangeCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x0c),
         "command" / Type("pc"),
         "channel" / BitsInteger(4)
@@ -231,7 +266,7 @@ midiProgramChangeCodec = Struct(
 )
 
 midiPitchWheelChangeCodec = Struct(
-    EmbeddedBitStruct(
+    StreamCommand(
         Const(BitsInteger(4), 0x0e),
         "command" / Type("pitch"),
         "channel" / BitsInteger(4)
@@ -240,7 +275,7 @@ midiPitchWheelChangeCodec = Struct(
 )
 
 midiSysexCodec = Struct(
-    Const(Byte, 0xf0),
+    StreamCommand(Const(BitsInteger(8), 0xf0)),
     "command" / Type("sysex"),
     "data" / PrefixedArray(OffsetIntAdapter(variableLengthCodec, -1), Byte),
     Const(Byte, 0xf7)
@@ -248,7 +283,7 @@ midiSysexCodec = Struct(
 
 def buildMetaFixedLenCodec(id, command, length, valueCodec):
     return Struct(
-        Const(Byte, 0xff),
+        StreamCommand(Const(BitsInteger(8), 0xff)),
         Const(Byte, id),
         "command" / Type(command),
         Const(Byte, length),
@@ -257,7 +292,7 @@ def buildMetaFixedLenCodec(id, command, length, valueCodec):
 
 def buildMetaTextCodec(id, command):
     return Struct(
-        Const(Byte, 0xff),
+        StreamCommand(Const(BitsInteger(8), 0xff)),
         Const(Byte, id),
         "command" / Type(command),
         "value" / PascalString(variableLengthCodec, encoding="utf8")
@@ -277,14 +312,14 @@ midiMetaTempoCodec = buildMetaFixedLenCodec(0x51, "meta-tempo", 3, Int24ub)
 midiMetaSMPTEOffsetCodec = buildMetaFixedLenCodec(0x54, "meta-smpte-offset", 5, Byte[5])
 
 midiMetaEOTCodec = Struct(
-    Const(Byte, 0xff),
+    StreamCommand(Const(BitsInteger(8), 0xff)),
     Const(Byte, 0x2f),
     "command" / Type("meta-eot"),
     Const(Byte, 0)
 )
 
 midiMetaTimeSigCodec = Struct(
-    Const(Byte, 0xff),
+    StreamCommand(Const(BitsInteger(8), 0xff)),
     Const(Byte, 0x58),
     "command" / Type("meta-time"),
     Const(Byte, 4),
@@ -295,7 +330,7 @@ midiMetaTimeSigCodec = Struct(
 )
 
 midiMetaKeySigCodec = Struct(
-    Const(Byte, 0xff),
+    StreamCommand(Const(BitsInteger(8), 0xff)),
     Const(Byte, 0x59),
     "command" / Type("meta-key"),
     Const(Byte, 2),
@@ -304,7 +339,7 @@ midiMetaKeySigCodec = Struct(
 )
 
 midiGenericMetaCodec = Struct(
-    Const(Byte, 0xff),
+    StreamCommand(Const(BitsInteger(8), 0xff)),
     "command" / Type("meta"),
     "id" / Byte,
     "data" / PrefixedArray(variableLengthCodec, Byte),
@@ -489,7 +524,7 @@ ctabCodec = Struct(
     Embedded(Prefixed(Int32ub, Struct(
         Embedded(ctCommonCodec),
         "ntr" / Enum(Byte, **{
-            "root-transposition": 0,
+            "root-trans": 0,
             "root-fixed": 1
         }),
         "ntt" / Enum(Byte, **{
@@ -518,7 +553,7 @@ ctabCodec = Struct(
 
 ctb2SubCodec = Struct(
     "ntr" / Enum(Byte, **{
-        "root-transposition": 0,
+        "root-trans": 0,
         "root-fixed": 1,
         "guitar": 2
     }),

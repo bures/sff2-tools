@@ -33,6 +33,7 @@ transpositions = {
     'melody': {
         ('Maj7', 'Maj7'): [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         ('Maj7', 'Maj'): [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ('Maj', 'Maj7'): [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         ('Maj7', 'min'): [0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0],
     }
 }
@@ -115,7 +116,7 @@ def getEmptyStyle(name, tempo=100):
     ]
 
 
-def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', chordKey='c', chordType='Maj7'):
+def getCtb2(name, sourceChannel, destChannel, autostart, ntr, ntt, rtr, chordKey, chordType, noteLowLimit, noteHighLimit):
     return {
         "type": "ctb2",
         "source-channel": sourceChannel,
@@ -123,7 +124,7 @@ def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', cho
         "destination-channel": destChannel,
         "editable": True,
         "note-play": { "b": 1, "a#": 1, "a": 1, "g#": 1, "g": 1, "f#": 1, "f": 1, "e": 1, "d#": 1, "d": 1, "c#": 1, "c": 1 },
-        "chord-play": { "bit35": 0, "autostart": 1, "1+2+5": 1, "sus4": 1, "1+5": 1, "1+8": 1, "7aug": 1, "Maj7aug": 1, "7(#9)": 1,
+        "chord-play": { "bit35": 0, "autostart": 1 if autostart else 0, "1+2+5": 1, "sus4": 1, "1+5": 1, "1+8": 1, "7aug": 1, "Maj7aug": 1, "7(#9)": 1,
             "7(b13)": 1, "7(b9)": 1, "7(13)": 1, "7#11": 1, "7(9)": 1, "7b5": 1, "7sus4": 1, "7th": 1, "dim7": 1, "dim": 1, "minMaj7(9)": 1,
             "minMaj7": 1, "min7(11)": 1, "min7(9)": 1, "min(9)": 1, "m7b5": 1, "min7": 1, "min6": 1, "min": 1, "aug": 1, "Maj6(9)": 1,
             "Maj7(9)": 1, "Maj(9)": 1, "Maj7#11": 1, "Maj7": 1, "Maj6": 1, "Maj": 1 },
@@ -137,10 +138,10 @@ def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', cho
                 "bass": False,
                 "rule": ntt
             },
-            "high-key": "f#",
-            "note-low-limit": 0,
-            "note-high-limit": 127,
-            "retrigger-rule": "pitch-shift"
+            "high-key": "g",
+            "note-low-limit": noteLowLimit,
+            "note-high-limit": noteHighLimit,
+            "retrigger-rule": rtr
         },
         "middle": {
             "ntr": ntr,
@@ -148,10 +149,10 @@ def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', cho
                 "bass": False,
                 "rule": ntt
             },
-            "high-key": "f#",
-            "note-low-limit": 0,
-            "note-high-limit": 127,
-            "retrigger-rule": "pitch-shift"
+            "high-key": "g",
+            "note-low-limit": noteLowLimit,
+            "note-high-limit": noteHighLimit,
+            "retrigger-rule": rtr
         },
         "high": {
             "ntr": ntr,
@@ -159,10 +160,10 @@ def getCtb2(name, sourceChannel, destChannel, ntr='root-fixed', ntt='chord', cho
                 "bass": False,
                 "rule": ntt
             },
-            "high-key": "f#",
-            "note-low-limit": 0,
-            "note-high-limit": 127,
-            "retrigger-rule": "pitch-shift"
+            "high-key": "g",
+            "note-low-limit": noteLowLimit,
+            "note-high-limit": noteHighLimit,
+            "retrigger-rule": rtr
         },
         "unknown": [ 0, 0, 0, 0, 0, 0, 0 ]
     }
@@ -465,38 +466,35 @@ class Style(object):
             return events
 
 
-    def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos, replace=False):
+    def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos):
         ts = self.trackSections[trackSection]
 
         for channel in channels:
             channelId = getChannelId(channel)
 
             if channelId in ts['channels']:
-                events = ts['channels'][channelId]
+                newEvents = []
+                for event in ts['channels'][channelId]:
+                    if event['time'] < offset:
+                        newEvents.append(event)
 
-                ending = []
-                for event in events:
                     if event['command'] == 'on' and event['time'] >= fromTime and event['time'] < toTime:
-                        ending.append({
+                        newEvents.append({
                             "time": event['time'] + offset,
                             "command": "on",
                             "note": event['note'],
                             "velocity": event['velocity']
                         })
 
-                        ending.append({
+                        newEvents.append({
                             "time": mutePos,
                             "command": "off",
                             "note": event['note'],
                             "velocity": 0
                         })
 
-                if replace:
-                    ts['channels'][channelId] = events = ending
-                else:
-                    events.extend(ending)
-
-                events.sort(key=lambda event: event['time'])
+                newEvents.sort(key=lambda event: event['time'])
+                ts['channels'][channelId] = newEvents
 
 
     def _createTrackSection(self, trackSection, length):
@@ -666,24 +664,15 @@ class Style(object):
                 self.casm[name][channel]['source-chord-key'] = toKey
 
 
-    def wrapUpChannels(self, trackSection, toTime, channels=allChannels, fromTime=0, noOfBeats=4, mutePos=-20):
-        ts = self.trackSections[trackSection]
-                
-        origLength = ts['length']
-        ts['length'] += noOfBeats * beats
-
-        self._addEnding(trackSection, channels, fromTime, toTime, origLength, ts['length'] + mutePos)
-
-
-    def createEnding(self, fromTrackSection, toTrackSection, toTime, channels=allChannels, fromTime=0, noOfBeats=4, mutePos=-20):
-        if toTrackSection in self.trackSections:
-            length = self.trackSections[toTrackSection]['length']
+    def createEnding(self, sourceTrackSection, destTrackSection, sourceLength, channels=allChannels, sourceStartBeat=0, endStartBeat=0, destNoOfBeats=4, mutePos=-20):
+        if destTrackSection in self.trackSections:
+            length = self.trackSections[destTrackSection]['length']
         else:
-            length = noOfBeats * beats
+            length = destNoOfBeats * beats
 
-        self.importChannels(self, channels=channels, trackSections=[(fromTrackSection, toTrackSection, length / beats)])
+        self.importChannels(self, channels=channels, trackSections=[(sourceTrackSection, destTrackSection, int(length / beats))])
 
-        self._addEnding(toTrackSection, channels, fromTime, toTime, 0, length + mutePos, replace=True)
+        self._addEnding(destTrackSection, channels, sourceStartBeat, sourceLength, endStartBeat * beats, length + mutePos)
 
 
     def createTrackSection(self, trackSection, noOfBeats):
@@ -691,14 +680,17 @@ class Style(object):
             self._createTrackSection(trackSection, noOfBeats * beats)
 
 
-    def setupChannel(self, channel, name, bankMsb, bankLsb, program, volume=100, pan=64, reverb=20, chorus=10, ntr='root-fixed', ntt='chord', chordKey='c', chordType='Maj7'):
+    def setupChannel(self, channel, name, bankMsb, bankLsb, program, autostart=False, destChannel=None, volume=100, pan=64, reverb=20, chorus=10, ntr='root-fixed', ntt='chord', rtr='pitch-shift', chordKey='c', chordType='Maj7', noteLowLimit=0, noteHighLimit=127):
+        if destChannel is None:
+            destChannel = channel
+
         channelId = getChannelId(channel)
 
         for tsName in allTrackSectionsWithNotes:
             if tsName in self.trackSections:
-                self.casm[tsName][channel] = getCtb2(name, channel, channel, ntr=ntr, ntt=ntt, chordKey=chordKey, chordType=chordType)
+                self.casm[tsName][channel] = getCtb2(name, autostart=autostart, sourceChannel=channel, destChannel=destChannel, ntr=ntr, ntt=ntt, rtr=rtr, chordKey=chordKey, chordType=chordType, noteLowLimit=noteLowLimit, noteHighLimit=noteHighLimit)
 
-        self.trackSections['SInt']['channels'][channelId] = getChannelSetupEvents(bankLsb=bankLsb, bankMsb=bankMsb, program=program, pan=pan, reverb=reverb, chorus=chorus)
+        self.trackSections['SInt']['channels'][channelId] = getChannelSetupEvents(bankLsb=bankLsb, bankMsb=bankMsb, program=program, pan=pan, reverb=reverb, chorus=chorus, volume=volume)
 
 
     def setEvents(self, channel, noOfBeats, events, trackSections=allTrackSectionsWithNotes, loop=True):
