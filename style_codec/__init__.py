@@ -466,37 +466,6 @@ class Style(object):
             return events
 
 
-    def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos):
-        ts = self.trackSections[trackSection]
-
-        for channel in channels:
-            channelId = getChannelId(channel)
-
-            if channelId in ts['channels']:
-                newEvents = []
-                for event in ts['channels'][channelId]:
-                    if event['time'] < offset:
-                        newEvents.append(event)
-
-                    if event['command'] == 'on' and event['time'] >= fromTime and event['time'] < toTime:
-                        newEvents.append({
-                            "time": event['time'] + offset,
-                            "command": "on",
-                            "note": event['note'],
-                            "velocity": event['velocity']
-                        })
-
-                        newEvents.append({
-                            "time": mutePos,
-                            "command": "off",
-                            "note": event['note'],
-                            "velocity": 0
-                        })
-
-                newEvents.sort(key=lambda event: event['time'])
-                ts['channels'][channelId] = newEvents
-
-
     def _createTrackSection(self, trackSection, length):
         self.trackSections[trackSection] = {
             'name': trackSection,
@@ -664,7 +633,7 @@ class Style(object):
                 self.casm[name][channel]['source-chord-key'] = toKey
 
 
-    def createEnding(self, sourceTrackSection, destTrackSection, sourceLength, channels=allChannels, sourceStartBeat=0, endStartBeat=0, destNoOfBeats=4, mutePos=-20):
+    def createEnding(self, sourceTrackSection, destTrackSection, sourceLength=100, channels=allChannels, sourceStartBeat=0, endStartBeat=0, destNoOfBeats=4, mutePos=-20):
         if destTrackSection in self.trackSections:
             length = self.trackSections[destTrackSection]['length']
         else:
@@ -672,7 +641,40 @@ class Style(object):
 
         self.importChannels(self, channels=channels, trackSections=[(sourceTrackSection, destTrackSection, int(length / beats))])
 
-        self._addEnding(destTrackSection, channels, sourceStartBeat, sourceLength, endStartBeat * beats, length + mutePos)
+        ts = self.trackSections[destTrackSection]
+
+        #self._addEnding(destTrackSection, channels, sourceStartBeat, sourceLength, endStartBeat * beats, length + mutePos)
+        #def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos):
+
+        offset = endStartBeat * beats
+        fromTime = sourceStartBeat * beats
+
+        for channel in channels:
+            channelId = getChannelId(channel)
+
+            if channelId in ts['channels']:
+                newEvents = []
+                for event in ts['channels'][channelId]:
+                    if event['time'] < offset:
+                        newEvents.append(event)
+
+                    if event['command'] == 'on' and event['time'] >= fromTime and event['time'] < sourceLength:
+                        newEvents.append({
+                            "time": event['time'] + offset,
+                            "command": "on",
+                            "note": event['note'],
+                            "velocity": event['velocity']
+                        })
+
+                        newEvents.append({
+                            "time": length + mutePos,
+                            "command": "off",
+                            "note": event['note'],
+                            "velocity": 0
+                        })
+
+                newEvents.sort(key=lambda event: event['time'])
+                ts['channels'][channelId] = newEvents
 
 
     def createTrackSection(self, trackSection, noOfBeats):

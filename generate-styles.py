@@ -59,8 +59,7 @@ style.setEvents(trackSections=['Intro A'], channel=9, noOfBeats=1, events=[
        {"time": beats - 20, "command": "off", "note": 89, "velocity": 0},
 ])
 
-style.createEnding('Main A', 'Ending A', 100, channels=[8, 9])
-style.createEnding('Main A', 'Ending B', 100, channels=[8, 9])
+style.createEnding('Main A', 'Ending A', channels=[8, 9])
 
 
 style.addOTS(right1=harmonium3Right)
