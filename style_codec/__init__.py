@@ -3,7 +3,7 @@ import rtmidi
 from construct import Container
 import json
 
-from .codecs import styleCodec, midiEventCodec, beatResolution as beats, TrackSplitAdapter, sectionMarkers, csegEntriesCodec
+from .codecs import styleCodec, multiPadCodec, midiEventCodec, beatResolution as beats, TrackSplitAdapter, sectionMarkers, csegEntriesCodec
 from .yamlex import yaml
 
 from pprint import pprint
@@ -66,6 +66,40 @@ def clone(obj):
     else:
         return obj
 
+
+def getEmptyMultipad(cm='1111', rp='1111'):
+    return {
+        'section': 'midi',
+        "tracks": [
+            [
+                {"time": 0, "command": "meta-time", "num": 4, "denom": 2},
+                {"time": 0, "command": "meta-tempo", "value": 500000},
+                {"time": 0, "command": "meta-text", "value": "CM" + cm},
+                {"time": 0, "command": "meta-text", "value": "RP" + rp},
+                {"time": 0, "command": "meta-text", "value": "Pad1"},
+                {"time": 0, "command": "meta-text", "value": "Pad2"},
+                {"time": 0, "command": "meta-text", "value": "Pad3"},
+                {"time": 0, "command": "meta-text", "value": "Pad4"},
+                {"time": 0, "command": "meta-text", "value": "I1S096"},
+                {"time": 0, "command": "meta-text", "value": "I2S096"},
+                {"time": 0, "command": "meta-text", "value": "I3S096"},
+                {"time": 0, "command": "meta-text", "value": "I4S096"},
+                {"time": 0, "command": "meta-eot"}
+            ],
+            [
+                {"time": 0, "command": "meta-eot"}
+            ],
+            [
+                {"time": 0, "command": "meta-eot"}
+            ],
+            [
+                {"time": 0, "command": "meta-eot"}
+            ],
+            [
+                {"time": 0, "command": "meta-eot"}
+            ]
+        ]
+    }
 
 def getEmptyStyle(name, tempo=100):
     return [
@@ -236,6 +270,139 @@ def getOTSEvents(right1=None, right2=None, right3=None, left=None):
     events.append({'time': 0, 'command': 'meta-eot'})
 
     return events
+
+
+class MultiPad(object):
+    translateMode6Table = {
+        0x30: 0x30,
+        0x31: 0x2B,
+        0x34: 0x30,
+        0x35: 0x34,
+        0x37: 0x37,
+        0x39: 0x3C,
+        0x3B: 0x40,
+        0x3C: 0x30,
+        0x3D: 0x2B,
+        0x40: 0x30,
+        0x41: 0x37,
+        0x43: 0x3C,
+        0x45: 0x40,
+        0x47: 0x43,
+        0x48: 0x30,
+        0x49: 0x37,
+        0x4A: 0x30,
+        0x4C: 0x37,
+        0x4D: 0x3C,
+        0x4F: 0x40,
+        0x51: 0x43,
+        0x53: 0x48,
+        0x54: 0x30,
+        0x55: 0x37,
+        0x58: 0x3C,
+        0x59: 0x40,
+        0x5B: 0x43,
+        0x5D: 0x48,
+        0x5F: 0x4C
+    }
+
+
+    def __init__(self, data = None, cm='1111', rp='1111'):
+        if data is None:
+            self._data = getEmptyMultipad(cm, rp)
+        else:
+            self._data = data
+
+    def translateNoteMode6(note):
+        if note >= 96:
+            return note
+        elif note in MultiPad.translateMode6Table:
+            return MultiPad.translateMode6Table[note]
+        else:
+            return None
+
+
+
+    @classmethod
+    def fromPad(cls, fn):
+        with open(fn, 'rb') as f:
+            data = f.read()
+        return MultiPad(data = multiPadCodec.parse(data))
+
+
+    @classmethod
+    def fromYml(cls, fn):
+        with open(fn, 'r') as f:
+            data = yaml.safe_load(f)
+        return MultiPad(data = data)
+
+
+    def saveAsPad(self, fn):
+        with open(fn, 'wb') as f:
+            f.write(multiPadCodec.build(self._data))
+
+    def saveAsYml(self, fn):
+        with open(fn, 'w') as f:
+            f.write(yaml.safe_dump(self._data, width=65536))
+
+    def saveAsJson(self, fn):
+        with open(fn, 'w') as f:
+            f.write(json.dumps(self._data, indent=2))
+
+    def getEvents(self, trackNo, startTime=12, timeOffset=0, translateMode6=False):
+        result = []
+        globalTime = 0
+
+        for event in self._data['tracks'][trackNo]:
+            globalTime += event['time']
+
+            if globalTime < startTime:
+                continue
+
+            if event['command'] == 'meta-eot':
+                continue
+
+            newEvent = clone(event)
+            newEvent['time'] = globalTime - startTime + timeOffset
+            if 'channel' in newEvent:
+                del newEvent['channel']
+
+            if translateMode6:
+                cmd = event['command']
+                if cmd == 'on' or cmd == 'off':
+                    trNote = MultiPad.translateNoteMode6(event['note'])
+                    if trNote is not None:
+                        newEvent['note'] = trNote
+                        result.append(newEvent)
+                else:
+                    result.append(newEvent)
+
+            else:
+                result.append(newEvent)
+
+        return result
+
+    def setEvents(self, trackNo, events):
+        rawEvents = []
+        globalTime = 0
+
+        for event in events:
+            if event['command'] == 'meta-eot':
+                continue
+
+            rawEvent = clone(event)
+            rawEvent['time'] = event['time'] - globalTime
+            rawEvent['channel'] = trackNo - 1
+
+            globalTime = event['time']
+
+            rawEvents.append(rawEvent)
+
+        rawEvents.append(
+            {"time": 0, "command": "meta-eot"}
+        )
+
+        self._data['tracks'][trackNo] = rawEvents
+
 
 
 class RawStyle(object):

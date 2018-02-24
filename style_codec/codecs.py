@@ -389,13 +389,12 @@ midiSectionCodec = Struct(
     Const(b"MThd"),
     "section" / Type("midi"),
     Const(Int32ub, 6),
-    Const(Int16ub, 0),
-    Const(Int16ub, 1),
+    Const(Int16ub, 0), # file-format
+    Const(Int16ub, 1), # nr-of-tracks
     Const(Int16ub, beatResolution),
     "track-sections" / TrackSplitAdapter(midiTrackCodec)
     #"track" / midiTrackCodec
 )
-
 
 
 sdecCodec = Struct(
@@ -673,3 +672,14 @@ mdbSectionCodec = Struct(
 
 
 styleCodec = FullRange(Select(midiSectionCodec, casmSectionCodec, otsSectionCodec, mdbSectionCodec))
+
+multiPadCodec = Struct(
+    Const(b"MThd"),
+    "section" / Type("midi"),
+    Const(Int32ub, 6),
+    Const(Int16ub, 1), # file-format
+    Const(Int16ub, 5), # nr-of-tracks
+    Const(Int16ub, beatResolution),
+    "tracks" / FullRange(midiTrackCodec)
+)
+
