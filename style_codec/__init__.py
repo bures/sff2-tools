@@ -2,6 +2,8 @@ import time
 import rtmidi
 from construct import Container
 import json
+import re
+import math
 
 from .codecs import styleCodec, multiPadCodec, midiEventCodec, beatResolution as beats, TrackSplitAdapter, sectionMarkers, csegEntriesCodec
 from .yamlex import yaml
@@ -150,7 +152,7 @@ def getEmptyStyle(name, tempo=100):
     ]
 
 
-def getCtb2(name, sourceChannel, destChannel, autostart, ntr, ntt, rtr, chordKey, chordType, noteLowLimit, noteHighLimit):
+def getCtb2(name, sourceChannel, destChannel, autostart, bass, ntr, ntt, rtr, chordKey, chordType, noteLowLimit, noteHighLimit):
     return {
         "type": "ctb2",
         "source-channel": sourceChannel,
@@ -169,7 +171,7 @@ def getCtb2(name, sourceChannel, destChannel, autostart, ntr, ntt, rtr, chordKey
         "low": {
             "ntr": ntr,
             "ntt": {
-                "bass": False,
+                "bass": bass,
                 "rule": ntt
             },
             "high-key": "g",
@@ -180,7 +182,7 @@ def getCtb2(name, sourceChannel, destChannel, autostart, ntr, ntt, rtr, chordKey
         "middle": {
             "ntr": ntr,
             "ntt": {
-                "bass": False,
+                "bass": bass,
                 "rule": ntt
             },
             "high-key": "g",
@@ -191,7 +193,7 @@ def getCtb2(name, sourceChannel, destChannel, autostart, ntr, ntt, rtr, chordKey
         "high": {
             "ntr": ntr,
             "ntt": {
-                "bass": False,
+                "bass": bass,
                 "rule": ntt
             },
             "high-key": "g",
@@ -272,55 +274,12 @@ def getOTSEvents(right1=None, right2=None, right3=None, left=None):
     return events
 
 
-class MultiPad(object):
-    translateMode6Table = {
-        0x30: 0x30,
-        0x31: 0x2B,
-        0x34: 0x30,
-        0x35: 0x34,
-        0x37: 0x37,
-        0x39: 0x3C,
-        0x3B: 0x40,
-        0x3C: 0x30,
-        0x3D: 0x2B,
-        0x40: 0x30,
-        0x41: 0x37,
-        0x43: 0x3C,
-        0x45: 0x40,
-        0x47: 0x43,
-        0x48: 0x30,
-        0x49: 0x37,
-        0x4A: 0x30,
-        0x4C: 0x37,
-        0x4D: 0x3C,
-        0x4F: 0x40,
-        0x51: 0x43,
-        0x53: 0x48,
-        0x54: 0x30,
-        0x55: 0x37,
-        0x58: 0x3C,
-        0x59: 0x40,
-        0x5B: 0x43,
-        0x5D: 0x48,
-        0x5F: 0x4C
-    }
-
-
+class RawMultiPad(object):
     def __init__(self, data = None, cm='1111', rp='1111'):
         if data is None:
             self._data = getEmptyMultipad(cm, rp)
         else:
             self._data = data
-
-    def translateNoteMode6(note):
-        if note >= 96:
-            return note
-        elif note in MultiPad.translateMode6Table:
-            return MultiPad.translateMode6Table[note]
-        else:
-            return None
-
-
 
     @classmethod
     def fromPad(cls, fn):
@@ -348,60 +307,136 @@ class MultiPad(object):
         with open(fn, 'w') as f:
             f.write(json.dumps(self._data, indent=2))
 
-    def getEvents(self, trackNo, startTime=12, timeOffset=0, translateMode6=False):
-        result = []
-        globalTime = 0
 
-        for event in self._data['tracks'][trackNo]:
-            globalTime += event['time']
+class MultiPad(object):
+    setupCmds = {'cc-volume', 'cc-reverb-level', 'cc-chorus-level', 'cc-bank-select-msb', 'cc-bank-select-lsb', 'pc'}
 
-            if globalTime < startTime:
-                continue
+    def __init__(self, data = None, cm='1111', rp='1111'):
+        if data is None:
+            self._data = getEmptyMultipad(cm, rp)
+        else:
+            self._data = data
 
-            if event['command'] == 'meta-eot':
-                continue
+        self._explodeAll()
 
-            newEvent = clone(event)
-            newEvent['time'] = globalTime - startTime + timeOffset
-            if 'channel' in newEvent:
-                del newEvent['channel']
+    def _explodeAll(self):
+        self.pads = []
+        self.setup = []
+        self.chordMatch = []
+        self.repeat = []
 
-            if translateMode6:
+        cmMatcher = re.compile('CM([0-9])([0-9])([0-9])([0-9])')
+        rpMatcher = re.compile('RP([0-1])([0-9])([0-9])([0-9])')
+
+        for event in self._data['tracks'][0]:
+            if event['command'] == 'meta-text':
+                value = event['value']
+
+                matchResult = cmMatcher.match(value)
+                if matchResult:
+                    self.chordMatch = [int(x) for x in matchResult.groups()]
+
+                matchResult = rpMatcher.match(value)
+                if matchResult:
+                    self.repeat = [int(x) for x in matchResult.groups()]
+
+
+        for padNo in range(4):
+            events = []
+            setupEvents = []
+            globalTime = 0
+
+            for event in self._data['tracks'][padNo + 1]:
+                globalTime += event['time']
                 cmd = event['command']
-                if cmd == 'on' or cmd == 'off':
-                    trNote = MultiPad.translateNoteMode6(event['note'])
-                    if trNote is not None:
-                        newEvent['note'] = trNote
-                        result.append(newEvent)
+
+                if cmd == 'meta-eot':
+                    continue
+
+                newEvent = clone(event)
+                newEvent['time'] = globalTime
+
+                if 'channel' in newEvent:
+                    del newEvent['channel']
+
+                if cmd in MultiPad.setupCmds:
+                    setupEvents.append(newEvent)
                 else:
-                    result.append(newEvent)
+                    events.append(newEvent)
 
-            else:
-                result.append(newEvent)
+            self.pads.append(events)
+            self.setup.append(setupEvents)
 
-        return result
 
-    def setEvents(self, trackNo, events):
-        rawEvents = []
-        globalTime = 0
+    def _implodeAll(self):
+        cmMatcher = re.compile('CM([0-9]){4}')
+        rpMatcher = re.compile('RP([0-1]){4}')
 
-        for event in events:
-            if event['command'] == 'meta-eot':
-                continue
+        for event in self._data['tracks'][0]:
+            if event['command'] == 'meta-text':
+                value = event['value']
 
-            rawEvent = clone(event)
-            rawEvent['time'] = event['time'] - globalTime
-            rawEvent['channel'] = trackNo - 1
+                matchResult = cmMatcher.match(value)
+                if matchResult:
+                    event['value'] = 'CM' + ''.join(self.chordMatch)
 
-            globalTime = event['time']
+                matchResult = rpMatcher.match(value)
+                if matchResult:
+                    event['value'] = 'RP' + ''.join(self.repeat)
 
-            rawEvents.append(rawEvent)
+        for padNo in range(4):
+            rawEvents = []
+            globalTime = 0
 
-        rawEvents.append(
-            {"time": 0, "command": "meta-eot"}
-        )
+            for event in sorted(self.pads[padNo] + self.setup[padNo], key=lambda ev: ev['time']):
+                if event['command'] == 'meta-eot':
+                    continue
 
-        self._data['tracks'][trackNo] = rawEvents
+                rawEvent = clone(event)
+                rawEvent['time'] = event['time'] - globalTime
+                rawEvent['channel'] = padNo
+
+                globalTime = event['time']
+
+                rawEvents.append(rawEvent)
+
+            rawEvents.append(
+                {"time": 0, "command": "meta-eot"}
+            )
+
+            self._data['tracks'][padNo + 1] = rawEvents
+
+
+
+
+    @classmethod
+    def fromPad(cls, fn):
+        with open(fn, 'rb') as f:
+            data = f.read()
+        return MultiPad(data = multiPadCodec.parse(data))
+
+
+    @classmethod
+    def fromYml(cls, fn):
+        with open(fn, 'r') as f:
+            data = yaml.safe_load(f)
+        return MultiPad(data = data)
+
+
+    def saveAsPad(self, fn):
+        self._implodeAll()
+        with open(fn, 'wb') as f:
+            f.write(multiPadCodec.build(self._data))
+
+    def saveAsYml(self, fn):
+        self._implodeAll()
+        with open(fn, 'w') as f:
+            f.write(yaml.safe_dump(self._data, width=65536))
+
+    def saveAsJson(self, fn):
+        self._implodeAll()
+        with open(fn, 'w') as f:
+            f.write(json.dumps(self._data, indent=2))
 
 
 
@@ -693,6 +728,7 @@ class Style(object):
 
 
     def saveAsJson(self, fn):
+        self._implodeAll()
         with open(fn, 'w') as f:
             f.write(json.dumps(self._style, indent=2))
 
@@ -777,6 +813,87 @@ class Style(object):
                     self.casm[toTrackSection][toChannel]['source-channel'] = toChannel
 
 
+    def createChannelFromPad(self, pad, padNo, name, channel, destChannel, autostart=False, trackSections=allTrackSectionsWithNotes, padNoOfBeats=None, padOffset=12, rtr='pitch-shift'):
+        channelName = getChannelId(channel)
+
+        chordMatch = pad.chordMatch[padNo]
+        if chordMatch == 0:
+            bass = False
+            ntr = 'root-fixed'
+            ntt = 'bypass'
+        elif chordMatch == 1:
+            bass = False
+            ntr = 'root-fixed'
+            ntt = 'melody'
+        elif chordMatch == 2:
+            bass = False
+            ntr = 'root-fixed'
+            ntt = 'chord'
+        elif chordMatch == 3:
+            bass = True
+            ntr = 'root-fixed'
+            ntt = 'melody'
+        elif chordMatch == 4:
+            bass = False
+            ntr = 'root-fixed'
+            ntt = 'melodic-minor'
+        elif chordMatch == 5:
+            bass = False
+            ntr = 'root-fixed'
+            ntt = 'harmonic-minor'
+        elif chordMatch == 6:
+            bass = False
+            ntr = 'guitar'
+            ntt = 'all-purpose'
+        elif chordMatch == 7: # FIXME: Not sure what this should be. The values below are a sheer guess.
+            bass = False
+            ntr = 'guitar'
+            ntt = 'stroke'
+        elif chordMatch == 8: # FIXME: Not sure what this should be. The values below are a sheer guess.
+            bass = False
+            ntr = 'guitar'
+            ntt = 'arpeggio'
+
+
+        origPadEvents = pad.pads[padNo]
+        setupEvents = pad.setup[padNo]
+
+        padEvents = []
+        for event in origPadEvents:
+            if event['time'] >= padOffset:
+                newEvent = clone(event)
+                newEvent['time'] = event['time'] - padOffset
+                padEvents.append(newEvent)
+
+
+        if padNoOfBeats is None:
+            if len(padEvents):
+                padNoOfBeats = math.ceil(padEvents[-1]['time'] / beats)
+            else:
+                padNoOfBeats = 4
+
+        padLength = padNoOfBeats * beats
+
+        for trackSection in trackSections:
+            if trackSection not in self.trackSections:
+                targetLength = padNoOfBeats * beats
+                self._createTrackSection(trackSection, targetLength)
+            else:
+                targetLength = self.trackSections[trackSection]['length']
+                if self.trackSections[trackSection]['length'] != targetLength:
+                    print(f'Warning: The length of target track section "{trackSection}" is different. You have to check the resulting style and manually correct the respective midi channel.')
+
+            self.trackSections[trackSection]['channels'][channelName] = \
+                self._loopEvents(padEvents, padLength, targetLength)
+
+            if trackSection not in self.casm:
+                self.casm[trackSection] = {}
+
+            self.casm[trackSection][channelName] = getCtb2(name, autostart=autostart, sourceChannel=channel, destChannel=destChannel, bass=bass, ntr=ntr, ntt=ntt, rtr=rtr, chordKey='c', chordType='Maj7', noteLowLimit=0, noteHighLimit=127)
+
+            self.trackSections['SInt']['channels'][channelName] = setupEvents
+
+
     def transposeChannel(self, channel, toKey, toChord, part='middle', trackSections=allTrackSectionsWithNotes):
         channelId = getChannelId(channel)
 
@@ -809,9 +926,6 @@ class Style(object):
         self.importChannels(self, channels=channels, trackSections=[(sourceTrackSection, destTrackSection, int(length / beats))])
 
         ts = self.trackSections[destTrackSection]
-
-        #self._addEnding(destTrackSection, channels, sourceStartBeat, sourceLength, endStartBeat * beats, length + mutePos)
-        #def _addEnding(self, trackSection, channels, fromTime, toTime, offset, mutePos):
 
         offset = endStartBeat * beats
         fromTime = sourceStartBeat * beats
@@ -849,7 +963,7 @@ class Style(object):
             self._createTrackSection(trackSection, noOfBeats * beats)
 
 
-    def setupChannel(self, channel, name, bankMsb, bankLsb, program, autostart=False, destChannel=None, volume=100, pan=64, reverb=20, chorus=10, ntr='root-fixed', ntt='chord', rtr='pitch-shift', chordKey='c', chordType='Maj7', noteLowLimit=0, noteHighLimit=127):
+    def setupChannel(self, channel, name, bankMsb, bankLsb, program, autostart=False, destChannel=None, volume=100, pan=64, reverb=20, chorus=10, bass=False, ntr='root-fixed', ntt='chord', rtr='pitch-shift', chordKey='c', chordType='Maj7', noteLowLimit=0, noteHighLimit=127):
         if destChannel is None:
             destChannel = channel
 
@@ -857,7 +971,7 @@ class Style(object):
 
         for tsName in allTrackSectionsWithNotes:
             if tsName in self.trackSections:
-                self.casm[tsName][channel] = getCtb2(name, autostart=autostart, sourceChannel=channel, destChannel=destChannel, ntr=ntr, ntt=ntt, rtr=rtr, chordKey=chordKey, chordType=chordType, noteLowLimit=noteLowLimit, noteHighLimit=noteHighLimit)
+                self.casm[tsName][channel] = getCtb2(name, autostart=autostart, sourceChannel=channel, destChannel=destChannel, bass=bass, ntr=ntr, ntt=ntt, rtr=rtr, chordKey=chordKey, chordType=chordType, noteLowLimit=noteLowLimit, noteHighLimit=noteHighLimit)
 
         self.trackSections['SInt']['channels'][channelId] = getChannelSetupEvents(bankLsb=bankLsb, bankMsb=bankMsb, program=program, pan=pan, reverb=reverb, chorus=chorus, volume=volume)
 
